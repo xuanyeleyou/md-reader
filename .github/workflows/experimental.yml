@@ -4,33 +4,10 @@ on:
   workflow_dispatch: # 在 Actions 标签页手动触发
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            target: universal-apple-darwin
-            label: macos
-          - platform: ubuntu-22.04
-            target: ""
-            label: linux
-
-    runs-on: ${{ matrix.platform }}
-
+  build-macos:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libgtk-3-dev
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -46,7 +23,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Cache cargo
         uses: swatinem/rust-cache@v2
@@ -59,17 +36,51 @@ jobs:
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         with:
-          args: ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
+          args: --target universal-apple-darwin
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: md-reader-${{ matrix.label }}
+          name: md-reader-macos
           retention-days: 14
           if-no-files-found: warn
           path: |
             src-tauri/target/**/release/bundle/dmg/*.dmg
             src-tauri/target/**/release/bundle/macos/*.app
-            src-tauri/target/**/release/bundle/deb/*.deb
-            src-tauri/target/**/release/bundle/rpm/*.rpm
-            src-tauri/target/**/release/bundle/appimage/*.AppImage
+
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: .github/docker/linux/Dockerfile
+          tags: md-reader-linux-builder:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build in Docker
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/build \
+            -e CI=true \
+            md-reader-linux-builder:latest \
+            /bin/bash -c "chmod +x .github/docker/linux/build.sh && .github/docker/linux/build.sh"
+
+      - name: Fix artifact ownership
+        run: sudo chown -R $USER:$USER src-tauri/target
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: md-reader-linux
+          retention-days: 30
+          if-no-files-found: warn
+          path: src-tauri/target/release/bundle/appimage/*.AppImage

@@ -19,8 +19,6 @@ RUN dnf -y install \
     perl \
     python3 \
     python3-pip \
-    ruby \
-    rubygems \
     pkgconfig \
     unzip \
     curl \
@@ -40,7 +38,7 @@ ENV PATH=/opt/rh/gcc-toolset-12/root/usr/bin:$PATH \
     CC=/opt/rh/gcc-toolset-12/root/usr/bin/gcc \
     CXX=/opt/rh/gcc-toolset-12/root/usr/bin/g++
 
-# WebKitGTK build dependencies (packages available in Rocky 8 + EPEL + CRB)
+# System-level WebKitGTK dependencies (GTK3 stack + media + image libs)
 RUN dnf -y install \
     gtk3-devel \
     libnotify-devel \
@@ -54,6 +52,7 @@ RUN dnf -y install \
     libjpeg-turbo-devel \
     libpng-devel \
     libtiff-devel \
+    openjpeg2-devel \
     libwpe-devel \
     wpebackend-fdo-devel \
     libXt-devel \
@@ -68,13 +67,32 @@ RUN dnf -y install \
     zlib-devel \
     libsodium-devel \
     libpsl-devel \
+    libmount-devel \
     gstreamer1-devel \
     gstreamer1-plugins-base-devel \
     gstreamer1-plugins-good \
     gstreamer1-plugins-bad-free-devel \
     && dnf clean all
 
-# Build libsoup3 from source (not available in Rocky 8 repos, required by WebKitGTK 4.1)
+# Build GLib 2.76 from source (libsoup3 needs >= 2.69.1, Rocky 8 has 2.56.4)
+ARG GLIB_VERSION=2.76.6
+RUN cd /tmp && \
+    curl -L -o glib.tar.xz \
+      "https://download.gnome.org/sources/glib/$(echo ${GLIB_VERSION} | cut -d. -f1,2)/glib-${GLIB_VERSION}.tar.xz" && \
+    tar xf glib.tar.xz && \
+    cd "glib-${GLIB_VERSION}" && \
+    meson setup build --prefix=/usr --libdir=/usr/lib64 \
+        -Dtests=false && \
+    ninja -C build && \
+    ninja -C build install && \
+    cd / && \
+    rm -rf /tmp/glib*
+
+# Set custom lib paths for subsequent builds
+ENV PKG_CONFIG_PATH=/usr/local/lib64/pkgconfig:/usr/lib64/pkgconfig \
+    LD_LIBRARY_PATH=/usr/local/lib64:/usr/lib64
+
+# Build libsoup3 from source (not in Rocky 8 repos, required by WebKitGTK 4.1)
 ARG LIBSOUP_VERSION=3.4.2
 RUN cd /tmp && \
     curl -L -o libsoup.tar.xz \
@@ -89,7 +107,6 @@ RUN cd /tmp && \
     rm -rf /tmp/libsoup*
 
 # Build WebKitGTK 2.42 from source (provides webkit2gtk-4.1 API needed by Tauri 2)
-# Note: webkit2gtk-4.1 uses GTK3 + libsoup3 (GTK4 is for webkitgtk-6.0)
 ARG WEBKITGTK_VERSION=2.42.5
 RUN cd /tmp && \
     curl -L -o webkitgtk.tar.xz \
@@ -108,6 +125,7 @@ RUN cd /tmp && \
         .. && \
     ninja && \
     ninja install && \
+    ldconfig && \
     cd / && \
     rm -rf /tmp/webkitgtk*
 

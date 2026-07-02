@@ -111,6 +111,22 @@ RUN cd /tmp && \
     cd / && \
     rm -rf /tmp/libsoup*
 
+# Build Cairo from source (Rocky 8 has 1.15.12, WebKitGTK 2.42 needs >= 1.16.0)
+ARG CAIRO_VERSION=1.18.0
+RUN cd /tmp && \
+    curl -L -o cairo.tar.xz \
+      "https://cairographics.org/releases/cairo-${CAIRO_VERSION}.tar.xz" && \
+    tar xf cairo.tar.xz && \
+    cd "cairo-${CAIRO_VERSION}" && \
+    mkdir build && cd build && \
+    ../configure --prefix=/usr --libdir=/usr/lib64 \
+        --enable-xlib --enable-xcb --enable-png --enable-svg --enable-ps --enable-pdf && \
+    make -j$(nproc) && \
+    make install && \
+    ldconfig && \
+    cd / && \
+    rm -rf /tmp/cairo*
+
 # Build WebKitGTK 2.42 from source (provides webkit2gtk-4.1 API needed by Tauri 2)
 ARG WEBKITGTK_VERSION=2.42.5
 RUN cd /tmp && \

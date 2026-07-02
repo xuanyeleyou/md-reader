@@ -71,6 +71,8 @@ RUN dnf -y install \
     libpsl-devel \
     libnghttp2-devel \
     libmount-devel \
+    ruby \
+    ruby-devel \
     gstreamer1-devel \
     gstreamer1-plugins-base-devel \
     gstreamer1-plugins-good \

@@ -69,6 +69,7 @@ RUN dnf -y install \
     zlib-devel \
     libsodium-devel \
     libpsl-devel \
+    libnghttp2-devel \
     libmount-devel \
     gstreamer1-devel \
     gstreamer1-plugins-base-devel \

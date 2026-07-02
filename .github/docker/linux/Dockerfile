@@ -15,7 +15,6 @@ RUN dnf -y install \
     gcc-toolset-12-binutils \
     cmake \
     ninja-build \
-    meson \
     perl \
     python3 \
     python3-pip \
@@ -32,6 +31,9 @@ RUN dnf -y install \
     patchelf \
     appstream \
     && dnf clean all
+
+# Install newer meson via pip (Rocky 8 ships 0.58, GLib 2.76 needs >= 0.60)
+RUN pip3 install meson
 
 # Enable GCC 12 by default (better C++20 support for WebKitGTK)
 ENV PATH=/opt/rh/gcc-toolset-12/root/usr/bin:$PATH \

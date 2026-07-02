@@ -3,8 +3,7 @@ FROM rockylinux:8
 # Enable EPEL and CRB (CodeReady Builder) for additional dev packages
 RUN dnf -y install 'dnf-command(config-manager)' && \
     dnf -y install epel-release && \
-    dnf config-manager --set-enabled crb || \
-    dnf config-manager --set-enabled powertools && \
+    (dnf config-manager --set-enabled crb || dnf config-manager --set-enabled powertools) && \
     dnf -y update && \
     dnf clean all
 
@@ -16,8 +15,10 @@ RUN dnf -y install \
     gcc-toolset-12-binutils \
     cmake \
     ninja-build \
+    meson \
     perl \
     python3 \
+    python3-pip \
     ruby \
     rubygems \
     pkgconfig \
@@ -36,35 +37,23 @@ RUN dnf -y install \
 
 # Enable GCC 12 by default (better C++20 support for WebKitGTK)
 ENV PATH=/opt/rh/gcc-toolset-12/root/usr/bin:$PATH \
-    LD_LIBRARY_PATH=/opt/rh/gcc-toolset-12/root/usr/lib64:$LD_LIBRARY_PATH \
-    MANPATH=/opt/rh/gcc-toolset-12/root/usr/share/man: \
     CC=/opt/rh/gcc-toolset-12/root/usr/bin/gcc \
     CXX=/opt/rh/gcc-toolset-12/root/usr/bin/g++
 
-# WebKitGTK build dependencies
+# WebKitGTK build dependencies (packages available in Rocky 8 + EPEL + CRB)
 RUN dnf -y install \
     gtk3-devel \
-    gtk4-devel \
     libnotify-devel \
     libsecret-devel \
-    libsoup3-devel \
     enchant2-devel \
     libtasn1-devel \
     libgcrypt-devel \
     gperf \
     gobject-introspection-devel \
     harfbuzz-devel \
-    icu-devel \
     libjpeg-turbo-devel \
     libpng-devel \
-    webp-devel \
-    openjpeg2-devel \
     libtiff-devel \
-    libavif-devel \
-    gst-plugins-base-devel \
-    gstreamer1-plugins-good \
-    gstreamer1-plugins-good-devel \
-    gstreamer1-plugins-bad-free-devel \
     libwpe-devel \
     wpebackend-fdo-devel \
     libXt-devel \
@@ -78,9 +67,29 @@ RUN dnf -y install \
     libxml2-devel \
     zlib-devel \
     libsodium-devel \
+    libpsl-devel \
+    gstreamer1-devel \
+    gstreamer1-plugins-base-devel \
+    gstreamer1-plugins-good \
+    gstreamer1-plugins-bad-free-devel \
     && dnf clean all
 
+# Build libsoup3 from source (not available in Rocky 8 repos, required by WebKitGTK 4.1)
+ARG LIBSOUP_VERSION=3.4.2
+RUN cd /tmp && \
+    curl -L -o libsoup.tar.xz \
+      "https://download.gnome.org/sources/libsoup/$(echo ${LIBSOUP_VERSION} | cut -d. -f1,2)/libsoup-${LIBSOUP_VERSION}.tar.xz" && \
+    tar xf libsoup.tar.xz && \
+    cd "libsoup-${LIBSOUP_VERSION}" && \
+    meson setup build --prefix=/usr --libdir=/usr/lib64 \
+        -Dtests=false -Ddocs=disabled -Dsysprof=disabled && \
+    ninja -C build && \
+    ninja -C build install && \
+    cd / && \
+    rm -rf /tmp/libsoup*
+
 # Build WebKitGTK 2.42 from source (provides webkit2gtk-4.1 API needed by Tauri 2)
+# Note: webkit2gtk-4.1 uses GTK3 + libsoup3 (GTK4 is for webkitgtk-6.0)
 ARG WEBKITGTK_VERSION=2.42.5
 RUN cd /tmp && \
     curl -L -o webkitgtk.tar.xz \
@@ -96,7 +105,6 @@ RUN cd /tmp && \
         -DENABLE_MINIBROWSER=OFF \
         -DENABLE_INTROSPECTION=OFF \
         -DENABLE_DOCS=OFF \
-        -DENABLE_GTK4=ON \
         .. && \
     ninja && \
     ninja install && \

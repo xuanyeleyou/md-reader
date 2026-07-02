@@ -142,6 +142,42 @@ const enUS = {
     readFailed: "Failed to read file",
     fileExists: "File already exists. Choose another name.",
   },
+  contextMenu: {
+    find: "Find",
+    reload: "Reload",
+    copySelection: "Copy selection",
+    copyPath: "Copy file path",
+    exportPdf: "Export PDF",
+    exportHtml: "Export HTML",
+    print: "Print",
+  },
+  tabContextMenu: {
+    refresh: "Refresh",
+    openDirectory: "Open directory",
+    close: "Close",
+    closeOthers: "Close other tabs",
+    copyPath: "Copy file path",
+  },
+  treeContextMenu: {
+    open: "Open",
+    openDirectory: "Open directory",
+    rename: "Rename",
+    copyPath: "Copy file path",
+  },
+  statusBar: {
+    fileSize: "Size",
+    chars: "Chars",
+    headings: "Headings",
+    unsaved: "Unsaved",
+    noFile: "No file",
+  },
+  toast: {
+    copied: "Copied to clipboard",
+    refreshed: "Refreshed",
+    renamed: "Renamed",
+    renameFailed: "Rename failed",
+    openDirFailed: "Failed to open directory",
+  },
 } satisfies MessageSchema;
 
 export default enUS;

@@ -67,6 +67,19 @@ function getScroll(path: string): number {
   return scrollMap.value[path] || 0;
 }
 
+function renamePath(oldPath: string, newPath: string) {
+  if (!oldPath || !newPath || oldPath === newPath) return;
+  recent.value = recent.value.map((item) =>
+    item.path === oldPath ? { ...item, path: newPath, name: basename(newPath) } : item
+  );
+  if (Object.prototype.hasOwnProperty.call(scrollMap.value, oldPath)) {
+    scrollMap.value[newPath] = scrollMap.value[oldPath];
+    delete scrollMap.value[oldPath];
+  }
+  localStorage.setItem(STORAGE_RECENT, JSON.stringify(recent.value));
+  localStorage.setItem(STORAGE_SCROLL, JSON.stringify(scrollMap.value));
+}
+
 export function useHistory() {
-  return { recent, pushRecent, clearRecent, saveScroll, getScroll };
+  return { recent, pushRecent, clearRecent, saveScroll, getScroll, renamePath };
 }

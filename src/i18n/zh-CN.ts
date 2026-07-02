@@ -135,6 +135,42 @@ const zhCN = {
     readFailed: "读取失败",
     fileExists: "文件已存在，请换个文件名",
   },
+  contextMenu: {
+    find: "查找",
+    reload: "重新加载",
+    copySelection: "复制选中内容",
+    copyPath: "复制文件路径",
+    exportPdf: "导出 PDF",
+    exportHtml: "导出 HTML",
+    print: "打印",
+  },
+  tabContextMenu: {
+    refresh: "刷新",
+    openDirectory: "打开文件目录",
+    close: "关闭",
+    closeOthers: "关闭其他标签",
+    copyPath: "复制文件路径",
+  },
+  treeContextMenu: {
+    open: "打开",
+    openDirectory: "打开文件目录",
+    rename: "重命名",
+    copyPath: "复制文件路径",
+  },
+  statusBar: {
+    fileSize: "大小",
+    chars: "字符",
+    headings: "标题",
+    unsaved: "未保存",
+    noFile: "无文件",
+  },
+  toast: {
+    copied: "已复制到剪贴板",
+    refreshed: "已刷新",
+    renamed: "已重命名",
+    renameFailed: "重命名失败",
+    openDirFailed: "打开目录失败",
+  },
 };
 
 export type MessageSchema = typeof zhCN;

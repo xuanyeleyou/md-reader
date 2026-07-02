@@ -11,6 +11,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "activate", id: string): void;
   (e: "close", id: string): void;
+  (e: "context", event: MouseEvent, id: string): void;
 }>();
 
 const { t } = useI18n();
@@ -46,6 +47,7 @@ function onMiddle(id: string) {
       :title="item.path"
       @click="emit('activate', item.id)"
       @mousedown.middle.prevent="onMiddle(item.id)"
+      @contextmenu.prevent.stop="emit('context', $event, item.id)"
     >
       <span v-if="item.isDirty" class="dot"></span>
       <span class="name">{{ item.name }}</span>

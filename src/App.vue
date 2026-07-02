@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from "vue";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { readTextFile, writeTextFile, stat } from "@tauri-apps/plugin-fs";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
@@ -15,6 +15,8 @@ import SettingsDialog from "./components/SettingsDialog.vue";
 import MarkdownEditor from "./components/MarkdownEditor.vue";
 import UnsavedChangesDialog from "./components/UnsavedChangesDialog.vue";
 import TabBar from "./components/TabBar.vue";
+import ContextMenu from "./components/ContextMenu.vue";
+import type { ContextMenuItem } from "./components/ContextMenu.vue";
 import { useFileTree } from "./composables/useFileTree";
 import { useFileWatcher } from "./composables/useFileWatcher";
 import { extractHeadings } from "./composables/useMarkdown";
@@ -24,6 +26,7 @@ import { useFindInPage } from "./composables/useFindInPage";
 import { useHistory } from "./composables/useHistory";
 import { useReadingSettings } from "./composables/useReadingSettings";
 import { useTabs, samePath, type Tab } from "./composables/useTabs";
+import { restoreWindowState, watchWindowState } from "./composables/useWindowState";
 import {
   exportToHtml,
   exportToDocx,
@@ -33,6 +36,24 @@ import {
   printDocument,
   type PandocInfo,
 } from "./composables/useExport";
+import {
+  FilePlus,
+  FileText,
+  FolderOpen,
+  RefreshCw,
+  X,
+  Eye,
+  Pencil,
+  Save,
+  FileDown,
+  Search,
+  Download,
+  Settings,
+  PanelLeft,
+  List,
+  Moon,
+  Sun,
+} from "@lucide/vue";
 
 const { t, locale } = useI18n();
 
@@ -54,7 +75,7 @@ const {
 } = useFileTree();
 
 const watcher = useFileWatcher();
-const { pushRecent, saveScroll, getScroll } = useHistory();
+const { pushRecent, saveScroll, getScroll, renamePath } = useHistory();
 const { apply: applyReadingSettings } = useReadingSettings();
 const {
   tabs,
@@ -118,6 +139,13 @@ const pandocInfo = ref<PandocInfo | null>(null);
 const pdfEnginePath = ref<string | null>(null);
 const renderTick = ref(0);
 
+const contextMenu = ref({ visible: false, x: 0, y: 0 });
+const tabContextMenu = ref({ visible: false, x: 0, y: 0, tabId: "" });
+const treeContextMenu = ref({ visible: false, x: 0, y: 0 });
+const selectedTreePath = ref("");
+const renamingTreePath = ref("");
+const fileSize = ref(0);
+
 const { width: leftWidth, startResize: resizeLeft } = useResizable(
   "md-reader-left-w",
   260
@@ -172,12 +200,186 @@ const unsavedDialogMessage = computed(() =>
 let headingTimer: number | null = null;
 let appWindow: import("@tauri-apps/api/window").Window | null = null;
 
+function closeAllContextMenus() {
+  contextMenu.value.visible = false;
+  tabContextMenu.value.visible = false;
+  treeContextMenu.value.visible = false;
+}
+
+function openTabContextMenu(e: MouseEvent, tabId: string) {
+  closeAllContextMenus();
+  tabContextMenu.value.x = e.clientX;
+  tabContextMenu.value.y = e.clientY;
+  tabContextMenu.value.tabId = tabId;
+  tabContextMenu.value.visible = true;
+}
+
+function openTreeContextMenu(e: MouseEvent, path: string) {
+  closeAllContextMenus();
+  selectedTreePath.value = path;
+  treeContextMenu.value.x = e.clientX;
+  treeContextMenu.value.y = e.clientY;
+  treeContextMenu.value.visible = true;
+}
+
+function openViewerContextMenu(e: MouseEvent) {
+  if (!hasActiveFile.value) return;
+  closeAllContextMenus();
+  contextMenu.value.x = e.clientX;
+  contextMenu.value.y = e.clientY;
+  contextMenu.value.visible = true;
+}
+
+function copyText(text: string) {
+  navigator.clipboard.writeText(text).then(() => {
+    exportToast.value = t("toast.copied");
+  });
+}
+
+function copyCurrentFilePath() {
+  if (currentFile.value) copyText(currentFile.value);
+}
+
+async function reloadCurrentFile() {
+  const tab = activeTab.value;
+  if (!tab) return;
+  await forceReloadTab(tab);
+  exportToast.value = t("toast.refreshed");
+}
+
+async function openContainingDirectory(path: string) {
+  try {
+    await invoke("open_file_directory", { path });
+  } catch (e: any) {
+    errorMsg.value = `${t("toast.openDirFailed")}: ${e?.message ?? e}`;
+  }
+}
+
+function closeOtherTabs(id: string) {
+  for (const tab of [...tabs.value]) {
+    if (tab.id !== id && !tab.isDirty) removeTab(tab.id);
+  }
+}
+
+function startRenameFile(path: string) {
+  renamingTreePath.value = path;
+}
+
+function cancelRenameFile() {
+  renamingTreePath.value = "";
+}
+
+async function submitRenameFile(oldPath: string, newName: string) {
+  renamingTreePath.value = "";
+  if (!newName || newName === basename(oldPath)) return;
+  try {
+    addSuppress(oldPath);
+    const newPath = await invoke<string>("rename_markdown_file", {
+      oldPath,
+      newName,
+    });
+    const tab = findTabByPath(oldPath);
+    if (tab) {
+      tab.path = newPath;
+    }
+    renamePath(oldPath, newPath);
+    await refreshTree();
+    scheduleSuppressClear(oldPath);
+    exportToast.value = `${t("toast.renamed")}: ${basename(newPath)}`;
+    persist();
+    await updateFileInfo();
+  } catch (e: any) {
+    clearSuppress(oldPath);
+    errorMsg.value = `${t("toast.renameFailed")}: ${e?.message ?? e}`;
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+async function updateFileInfo() {
+  const tab = activeTab.value;
+  if (!tab?.path) {
+    fileSize.value = 0;
+    return;
+  }
+  try {
+    const info = await stat(tab.path);
+    fileSize.value = info.size;
+  } catch {
+    fileSize.value = 0;
+  }
+}
+
+const bodyContextItems = computed((): ContextMenuItem[] => [
+  {
+    label: t("contextMenu.find"),
+    shortcut: "Ctrl+F",
+    action: () => {
+      if (isEditing.value) editorRef.value?.openSearch();
+      else find.open();
+    },
+  },
+  { label: t("contextMenu.reload"), action: () => reloadCurrentFile() },
+  { divider: true, label: "" },
+  {
+    label: t("contextMenu.copySelection"),
+    action: () => {
+      const sel = window.getSelection()?.toString();
+      if (sel) copyText(sel);
+    },
+  },
+  { label: t("contextMenu.copyPath"), action: () => copyCurrentFilePath() },
+  { divider: true, label: "" },
+  { label: t("contextMenu.exportPdf"), action: () => exportPdf() },
+  { label: t("contextMenu.exportHtml"), action: () => exportHtml() },
+  { label: t("contextMenu.print"), shortcut: "Ctrl+P", action: () => doPrint() },
+]);
+
+const tabContextItems = computed((): ContextMenuItem[] => {
+  const id = tabContextMenu.value.tabId;
+  const tab = tabs.value.find((t) => t.id === id);
+  if (!tab) return [];
+  return [
+    { label: t("tabContextMenu.refresh"), action: () => forceReloadTab(tab) },
+    {
+      label: t("tabContextMenu.openDirectory"),
+      action: () => openContainingDirectory(tab.path),
+    },
+    { divider: true, label: "" },
+    { label: t("tabContextMenu.copyPath"), action: () => copyText(tab.path) },
+    { divider: true, label: "" },
+    { label: t("tabContextMenu.close"), action: () => closeTab(id) },
+    { label: t("tabContextMenu.closeOthers"), action: () => closeOtherTabs(id) },
+  ];
+});
+
+const treeContextItems = computed((): ContextMenuItem[] => {
+  const path = selectedTreePath.value;
+  return [
+    { label: t("treeContextMenu.open"), action: () => loadFile(path) },
+    {
+      label: t("treeContextMenu.openDirectory"),
+      action: () => openContainingDirectory(path),
+    },
+    { divider: true, label: "" },
+    {
+      label: t("treeContextMenu.rename"),
+      shortcut: "F2",
+      action: () => startRenameFile(path),
+    },
+    { label: t("treeContextMenu.copyPath"), action: () => copyText(path) },
+  ];
+});
+
 function askUnsaved(
   tab: Tab,
   mode: UnsavedDialogMode
 ): Promise<UnsavedChoice> {
   if (unsavedResolve) {
-    // A dialog is already in flight; don't clobber its resolver.
     return Promise.resolve("cancel");
   }
   return new Promise((resolve) => {
@@ -600,7 +802,6 @@ function toggleTheme() {
   theme.value = theme.value === "light" ? "dark" : "light";
   localStorage.setItem("md-reader-theme", theme.value);
   applyTheme();
-  // Force Mermaid/KaTeX re-render so charts follow the new theme.
   renderTick.value++;
 }
 
@@ -758,9 +959,23 @@ function onKeydown(e: KeyboardEvent) {
   } else if (mod && e.key.toLowerCase() === "s") {
     e.preventDefault();
     void saveCurrentFile();
+  } else if (e.key === "F2" && showFileTree.value && selectedTreePath.value) {
+    e.preventDefault();
+    startRenameFile(selectedTreePath.value);
   } else if (e.key === "Escape") {
-    if (find.visible.value) find.close();
-    else if (showSettings.value) showSettings.value = false;
+    if (
+      contextMenu.value.visible ||
+      tabContextMenu.value.visible ||
+      treeContextMenu.value.visible
+    ) {
+      closeAllContextMenus();
+    } else if (renamingTreePath.value) {
+      cancelRenameFile();
+    } else if (find.visible.value) {
+      find.close();
+    } else if (showSettings.value) {
+      showSettings.value = false;
+    }
   }
 }
 
@@ -792,21 +1007,28 @@ watch(activeTabId, () => {
   find.close();
   find.clearHighlights();
   if (!activeTab.value?.isEditing) nextTick(onScroll);
+  void updateFileInfo();
 });
+
+watch(
+  () => activeTab.value?.path,
+  () => void updateFileInfo()
+);
 
 let unlistenDrop: (() => void) | null = null;
 let unlistenOpen: (() => void) | null = null;
 let unlistenClose: (() => void) | null = null;
+let unlistenWindowState: (() => void) | null = null;
 
 onMounted(async () => {
   applyTheme();
   applyReadingSettings();
+  await restoreWindowState();
   void checkPandoc().then((info) => (pandocInfo.value = info));
   void checkPdfEngine().then((p) => (pdfEnginePath.value = p));
   await restoreRoot();
   if (rootDir.value) await startWatching(rootDir.value);
 
-  // Listen for file-open events fired by Rust (file association / single-instance).
   try {
     const { listen } = await import("@tauri-apps/api/event");
     unlistenOpen = await listen<string>("md-reader://open-file", async (e) => {
@@ -824,7 +1046,6 @@ onMounted(async () => {
     appWindow = getCurrentWindow();
     unlistenClose = await appWindow.onCloseRequested(async (event) => {
       if (!tabs.value.some((tb) => tb.isDirty)) {
-        // No unsaved changes: let the default close proceed.
         return;
       }
       event.preventDefault();
@@ -834,6 +1055,8 @@ onMounted(async () => {
   } catch (e) {
     console.warn("close listener unavailable", e);
   }
+
+  unlistenWindowState = await watchWindowState();
 
   const initialPath = await getInitialOpenFile();
   await restoreTabs(initialPath);
@@ -858,6 +1081,7 @@ onUnmounted(() => {
   unlistenDrop?.();
   unlistenOpen?.();
   unlistenClose?.();
+  unlistenWindowState?.();
   if (headingTimer) clearTimeout(headingTimer);
   void watcher.stop();
   window.removeEventListener("keydown", onKeydown);
@@ -878,33 +1102,33 @@ watch(exportToast, (v) => {
 </script>
 
 <template>
-  <div class="app">
+  <div class="app" @click="closeAllContextMenus">
     <header class="toolbar">
       <button class="btn" @click="createNewFile" :title="t('toolbar.new') + ' (Ctrl+N)'">
-        {{ t("toolbar.new") }}
+        <FilePlus :size="15" /> {{ t("toolbar.new") }}
       </button>
       <button class="btn" @click="pickFile" :title="t('app.file') + ' .md'">
-        {{ t("app.file") }}
+        <FileText :size="15" /> {{ t("app.file") }}
       </button>
       <button class="btn" @click="pickFolder" :title="t('app.folder')">
-        {{ t("app.folder") }}
+        <FolderOpen :size="15" /> {{ t("app.folder") }}
       </button>
       <button
         v-if="rootDir"
-        class="btn"
+        class="btn icon-btn"
         @click="refreshTree"
         :disabled="treeLoading"
         :title="t('app.refresh')"
       >
-        ↻
+        <RefreshCw :size="14" />
       </button>
       <button
         v-if="rootDir"
-        class="btn"
+        class="btn icon-btn"
         @click="closeFolder"
         :title="t('app.closeFolder')"
       >
-        ✕
+        <X :size="14" />
       </button>
       <div class="filename" :title="currentFile">{{ displayFileName }}</div>
       <button
@@ -914,8 +1138,8 @@ watch(exportToast, (v) => {
         :title="(isEditing ? t('editor.preview') : t('editor.edit')) + ' (Ctrl+/)'"
       >
         {{ isEditing ? t("editor.preview") : t("editor.edit") }}
-        <svg v-if="isEditing" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-left:2px"><path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>
-        <svg v-else width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-left:2px"><path d="M11 2l3 3L4 15H1v-3z"/><path d="M8 6l2 2"/></svg>
+        <Eye v-if="isEditing" :size="14" />
+        <Pencil v-else :size="14" />
       </button>
       <button
         class="btn"
@@ -924,7 +1148,7 @@ watch(exportToast, (v) => {
         :title="t('editor.save') + ' (Ctrl+S)'"
       >
         {{ t("editor.save") }}
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-left:2px"><path d="M3 2h8l4 4v9H3V2z"/><path d="M11 2v4h4"/><path d="M5 8h6v5H5z"/></svg>
+        <Save :size="14" />
       </button>
       <button
         class="btn"
@@ -933,7 +1157,7 @@ watch(exportToast, (v) => {
         :title="t('editor.saveAs') + ' (Ctrl+Shift+S)'"
       >
         {{ t("editor.saveAs") }}
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-left:2px"><path d="M3 2h6l4 4v8H3V2z"/><path d="M9 2v4h4"/><path d="M6 10h6M6 12h6"/></svg>
+        <FileDown :size="14" />
       </button>
       <button
         class="btn"
@@ -942,7 +1166,7 @@ watch(exportToast, (v) => {
         :disabled="!hasActiveFile"
       >
         {{ t("toolbar.find") }}
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px;margin-left:2px"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l4.5 4.5"/></svg>
+        <Search :size="14" />
       </button>
       <div class="export-wrap">
         <button
@@ -954,7 +1178,7 @@ watch(exportToast, (v) => {
           "
         >
           {{ exportBusy ? "⏳" : t("toolbar.export") + " " }}
-          <svg v-if="!exportBusy" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M8 2v9M4 6l4-4 4 4"/><path d="M2 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/></svg>
+          <Download v-if="!exportBusy" :size="14" />
         </button>
         <div v-if="showExportMenu" class="export-menu" @click.stop>
           <button
@@ -1017,7 +1241,7 @@ watch(exportToast, (v) => {
         :title="t('toolbar.settings') + ' (Ctrl+,)'"
       >
         {{ t("toolbar.settingsBtn") }}
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px;margin-left:2px"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
+        <Settings :size="14" />
       </button>
       <button
         class="btn"
@@ -1025,7 +1249,7 @@ watch(exportToast, (v) => {
         :title="t('app.toggleSidebar')"
       >
         {{ t("toolbar.sidebar") }}
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-left:2px"><rect x="2" y="2" width="12" height="12" rx="1"/><path d="M6 2v12"/></svg>
+        <PanelLeft :size="14" />
       </button>
       <button
         class="btn"
@@ -1033,14 +1257,15 @@ watch(exportToast, (v) => {
         :title="t('app.toggleToc')"
       >
         {{ t("toolbar.outline") }}
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px;margin-left:2px"><path d="M3 3h10M3 7h10M3 11h7"/></svg>
+        <List :size="14" />
       </button>
       <button
-        class="btn icon"
+        class="btn icon-btn"
         @click="toggleTheme"
         :title="t('app.toggleTheme')"
       >
-        {{ theme === "light" ? "🌙" : "☀️" }}
+        <Moon v-if="theme === 'light'" :size="15" />
+        <Sun v-else :size="15" />
       </button>
       <button
         class="btn lang"
@@ -1057,6 +1282,7 @@ watch(exportToast, (v) => {
       :active-tab-id="activeTabId"
       @activate="switchToTab"
       @close="closeTab"
+      @context="openTabContextMenu"
     />
 
     <main class="layout">
@@ -1093,7 +1319,14 @@ watch(exportToast, (v) => {
               v-if="rootDir"
               :nodes="tree"
               :current-path="currentFile"
+              :selected-path="selectedTreePath"
+              :renaming-path="renamingTreePath"
               @open="loadFile"
+              @select="(p) => (selectedTreePath = p)"
+              @context="openTreeContextMenu"
+              @rename="startRenameFile"
+              @submit-rename="submitRenameFile"
+              @cancel-rename="cancelRenameFile"
             />
             <div v-else class="empty-tip">{{ t("app.openFolderHint") }}</div>
           </div>
@@ -1115,6 +1348,7 @@ watch(exportToast, (v) => {
         class="viewer"
         :class="{ editing: isEditing }"
         @scroll.passive="onViewerScroll"
+        @contextmenu.stop="openViewerContextMenu"
       >
         <div v-if="errorMsg" class="error">{{ errorMsg }}</div>
         <div v-else-if="!hasActiveFile" class="empty">
@@ -1190,6 +1424,43 @@ watch(exportToast, (v) => {
       @cancel="onDialogCancel"
     />
 
+    <ContextMenu
+      :visible="contextMenu.visible"
+      :x="contextMenu.x"
+      :y="contextMenu.y"
+      :items="bodyContextItems"
+      @close="closeAllContextMenus"
+    />
+    <ContextMenu
+      :visible="tabContextMenu.visible"
+      :x="tabContextMenu.x"
+      :y="tabContextMenu.y"
+      :items="tabContextItems"
+      @close="closeAllContextMenus"
+    />
+    <ContextMenu
+      :visible="treeContextMenu.visible"
+      :x="treeContextMenu.x"
+      :y="treeContextMenu.y"
+      :items="treeContextItems"
+      @close="closeAllContextMenus"
+    />
+
+    <footer class="statusbar">
+      <span
+        v-if="hasActiveFile"
+        class="sb-item sb-path"
+        :title="currentFile"
+      >{{ currentFile }}</span>
+      <span v-else class="sb-item">{{ t("statusBar.noFile") }}</span>
+      <div class="sb-right">
+        <span v-if="isDirty" class="sb-item sb-unsaved">{{ t("statusBar.unsaved") }}</span>
+        <span v-if="hasActiveFile" class="sb-item">{{ t("statusBar.chars") }}: {{ draftContent.length }}</span>
+        <span v-if="hasActiveFile" class="sb-item">{{ t("statusBar.headings") }}: {{ headings.length }}</span>
+        <span v-if="fileSize > 0" class="sb-item">{{ formatBytes(fileSize) }}</span>
+      </div>
+    </footer>
+
     <div v-if="exportToast" class="toast" @click="exportToast = ''">
       ✓ {{ exportToast }}
     </div>
@@ -1227,6 +1498,9 @@ watch(exportToast, (v) => {
   margin: 0 8px;
 }
 .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 13px;
   padding: 4px 10px;
   border-radius: 6px;
@@ -1242,10 +1516,8 @@ watch(exportToast, (v) => {
   opacity: 0.5;
   cursor: default;
 }
-.btn.icon {
+.btn.icon-btn {
   padding: 4px 8px;
-  font-size: 14px;
-  line-height: 1;
 }
 .layout {
   flex: 1 1 auto;
@@ -1425,6 +1697,36 @@ watch(exportToast, (v) => {
   position: fixed;
   inset: 0;
   z-index: 20;
+}
+.statusbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 12px;
+  font-size: 11px;
+  background: var(--shell-sidebar-bg);
+  border-top: 1px solid var(--shell-toolbar-border);
+  color: var(--fg-muted);
+  user-select: none;
+  min-height: 22px;
+}
+.sb-item {
+  padding: 0 6px;
+  white-space: nowrap;
+}
+.sb-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 50%;
+}
+.sb-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sb-unsaved {
+  color: var(--shell-tab-active-border);
 }
 .toast {
   position: fixed;

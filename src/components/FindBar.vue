@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
+import { ChevronUp, ChevronDown, X } from "@lucide/vue";
 
 const { t } = useI18n();
 
@@ -82,9 +83,9 @@ onMounted(() => {
     >
       Aa
     </button>
-    <button class="ic" @click="emit('prev')" :title="t('find.previous') + ' (Shift+Enter)'">↑</button>
-    <button class="ic" @click="emit('next')" :title="t('find.next') + ' (Enter)'">↓</button>
-    <button class="ic" @click="emit('close')" :title="t('find.close') + ' (Esc)'">✕</button>
+    <button class="ic" @click="emit('prev')" :title="t('find.previous') + ' (Shift+Enter)'"><ChevronUp :size="14" /></button>
+    <button class="ic" @click="emit('next')" :title="t('find.next') + ' (Enter)'"><ChevronDown :size="14" /></button>
+    <button class="ic" @click="emit('close')" :title="t('find.close') + ' (Esc)'"><X :size="14" /></button>
   </div>
 </template>
 

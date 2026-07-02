@@ -498,6 +498,7 @@ pub struct PandocInfo {
 }
 
 fn pandoc_cmd() -> Command {
+    #[allow(unused_mut)]
     let mut cmd = Command::new("pandoc");
     #[cfg(windows)]
     {

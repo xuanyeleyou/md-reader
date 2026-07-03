@@ -177,7 +177,26 @@ export function extractHeadings(source: string): Heading[] {
       const idAttr = t.attrGet("id") || "";
       const level = parseInt(t.tag.slice(1), 10);
       const next = tokens[i + 1];
-      const text = next && next.type === "inline" ? next.content : "";
+      let text = "";
+      if (next && next.type === "inline") {
+        if (next.children && next.children.length > 0) {
+          const parts: string[] = [];
+          for (const c of next.children) {
+            if (
+              c.type === "text" ||
+              c.type === "text_special" ||
+              c.type === "code_inline"
+            ) {
+              parts.push(c.content);
+            } else if (c.type === "softbreak" || c.type === "hardbreak") {
+              parts.push(" ");
+            }
+          }
+          text = parts.join("");
+        } else {
+          text = next.content;
+        }
+      }
       headings.push({ level, text, id: idAttr });
     }
   }

@@ -64,6 +64,11 @@ pub struct WatcherState {
     current_root: Mutex<Option<PathBuf>>,
 }
 
+#[derive(Default)]
+pub struct PendingOpenFiles {
+    paths: Mutex<Vec<String>>,
+}
+
 fn is_markdown_file(path: &Path) -> bool {
     matches!(
         path.extension()
@@ -441,9 +446,17 @@ fn set_app_theme(window: tauri::WebviewWindow, theme: String) -> Result<(), Stri
     Ok(())
 }
 #[tauri::command]
-fn initial_open_file() -> Option<String> {
+fn initial_open_file(state: State<PendingOpenFiles>) -> Option<String> {
     let argv: Vec<String> = std::env::args().collect();
-    extract_md_path_from_args(&argv)
+    if let Some(p) = extract_md_path_from_args(&argv) {
+        return Some(p);
+    }
+    if let Ok(mut q) = state.paths.lock() {
+        if !q.is_empty() {
+            return Some(q.remove(0));
+        }
+    }
+    None
 }
 
 #[tauri::command]
@@ -552,6 +565,7 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
             app.manage(WatcherState::default());
+            app.manage(PendingOpenFiles::default());
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_theme(None);
                 apply_windows_frame_theme(&window, false);
@@ -574,8 +588,40 @@ pub fn run() {
             pdf_utils::check_pdf_engine,
             pdf_export::export_pdf_via_edge
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            use tauri::Manager;
+            if let tauri::RunEvent::Opened { urls } = event {
+                let mut paths: Vec<String> = Vec::with_capacity(urls.len());
+                for url in urls {
+                    let path_opt = if url.scheme() == "file" {
+                        url.to_file_path().ok()
+                    } else {
+                        Some(PathBuf::from(url.path()))
+                    };
+                    if let Some(p) = path_opt {
+                        if !is_markdown_file(&p) {
+                            continue;
+                        }
+                        paths.push(p.to_string_lossy().to_string());
+                    }
+                }
+                if paths.is_empty() {
+                    return;
+                }
+                if let Some(state) = app.try_state::<PendingOpenFiles>() {
+                    if let Ok(mut guard) = state.paths.lock() {
+                        for p in &paths {
+                            guard.push(p.clone());
+                        }
+                    }
+                }
+                for p in &paths {
+                    let _ = app.emit("md-reader://open-file", p);
+                }
+            }
+        });
 }
 
 #[derive(Debug, Serialize, Clone)]
